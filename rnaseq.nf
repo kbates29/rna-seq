@@ -10,7 +10,6 @@
  * Defines parameters
  */
 
-params.reads_dir =  null
 params.reads = null
 params.genome_dir = null
 params.gtf = null
@@ -25,7 +24,7 @@ reverse = params.reverse_adap
  * Create channel for reads
  */
  Channel
-    .fromFilePairs(params.reads_dir/params.reads)
+    .fromFilePairs(params.reads)
     .ifEmpty {error "Cannot find reads matching: ${params.reads}"}
     .into {reads_fast_qc; reads_trim}
 
@@ -34,7 +33,7 @@ reverse = params.reverse_adap
  * Run fastqc prior to trimming to compare afterwords
  */
 process fast_qc{
-    label 'low_memory'
+    label 'low_mem'
     tag "$sampleId"
     publishDir "${params.out_dir}/fastqc", mode: 'copy', 
         saveAs: {filename -> filename.indexOf(".zip") > 0 ? "zips/$sampleId/$filename" : "$filename"}
@@ -58,7 +57,7 @@ process fast_qc{
  */
 
 process trim_galore{
-    label 'low_memory'
+    label 'low_mem'
     tag "$sampleId"
     publishDir "${params.out_dir}/trim_galore", mode: 'copy',
         saveAs: {filename ->
@@ -67,7 +66,7 @@ process trim_galore{
         }
 
     input:
-        set sampleId, file(reads) from reads_trim
+        set val(sampleId), file(reads) from reads_trim
 
     output:
         file "*.gz" into trimmed_reads
@@ -90,7 +89,7 @@ process trim_galore{
     publishDir "${$params.out.dir}/star/$sampleId",
 
     input:
-        set sampleId, file(reads) from trimmed_reads
+        file reads from trimmed_reads
         file gtf from params.gtf
 
     output:
@@ -102,7 +101,8 @@ process trim_galore{
 
     script:
         """
-        STAR --runThreadN 8 --genomeDir ${params.genome_dir} \
+        STAR --runMode alignReads --runThreadN 8 --genomeDir ${params.genome_dir} \
+        --readFilesIn $reads \
         --sjdbGTFfile ${params.genome_dir}/$gtf \
         --outFileNamePrefix $sampleId --outSamtype Bam SortedByCoordinate \
         --twopassMode Basic --readFilesCommand zcat
@@ -111,7 +111,7 @@ process trim_galore{
 
 
  process featurecounts{
-    labal 'low_memory'
+    labal 'low_mem'
     tag "$sampleId"
     publishDir "${params.out.dir}/featurecounts"
 
@@ -128,7 +128,7 @@ process trim_galore{
         """
  }
 
- process merge_counts{
+/* process merge_counts{
     label 'low_memory'
     publishDir "${params.out.dur}/featurecounts"
 
@@ -137,4 +137,4 @@ process trim_galore{
     
     output:
         file "merged_counts.txt"
- }
+ }*/
