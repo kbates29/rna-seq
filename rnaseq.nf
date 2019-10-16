@@ -1,4 +1,4 @@
-#! /home/kameron/bin/nextflow
+#!/gpfs_fs/home/batesk2/bin/nextflow
 
 /*
  * Starting with a raw fastq performs adapter trimming and QC with Trim Galore, 
@@ -33,7 +33,9 @@ reverse = params.reverse_adap
  * Run fastqc prior to trimming to compare afterwords
  */
 process fast_qc{
-    label 'low_mem'
+    executor 'sge'
+    clusterOptions '-S /bin/bash'
+    beforeScript 'printf "[%s] USER:\${USER:-none} JOB_ID:\${JOB_ID:-none} JOB_NAME:\${JOB_NAME:-none} HOSTNAME:\${HOSTNAME:-none} PWD:\$PWD\n"'
     tag "$sampleId"
     publishDir "${params.out_dir}/fastqc", mode: 'copy', 
         saveAs: {filename -> filename.indexOf(".zip") > 0 ? "zips/$sampleId/$filename" : "$filename"}
@@ -46,18 +48,19 @@ process fast_qc{
 
     script:
         """
-        fastqc -q $reads
+        export PATH=$PATH
+	    fastqc -q $reads
         """
 }
-
-
 
 /*
  *  Run Trim Galore which trims adapters with cutadapt and then reruns fastqc
  */
 
 process trim_galore{
-    label 'low_mem'
+    executor "sge"
+    clusterOptions="-S /bin/bash"
+    beforeScript 'printf "[%s] USER:\${USER:-none} JOB_ID:\${JOB_ID:-none} JOB_NAME:\${JOB_NAME:-none} HOSTNAME:\${HOSTNAME:-none} PWD:\$PWD\n"'
     tag "$sampleId"
     publishDir "${params.out_dir}/trim_galore", mode: 'copy',
         saveAs: {filename ->
@@ -69,13 +72,14 @@ process trim_galore{
         set val(sampleId), file(reads) from reads_trim
 
     output:
-        file "*.gz" into trimmed_reads
+        file "*.gz" into trimmed_reads, test_reads
         file "*trimming_report.txt" into trimgalore_results
         file "*_fastqc.{zip,html}" into trimgalore_fastqc
     
     script:
         """
-        trim_galore --paired --fastqc -a $forward -a2 $reverse $reads
+        export PATH=$PATH
+	    trim_galore --paired --fastqc -a $forward -a2 $reverse $reads
         """
 }
 
@@ -84,27 +88,36 @@ process trim_galore{
  * Run star 
  */
  process star{
-    label 'star'
+    executor "sge"
+    clusterOptions="-S /bin/bash -pe smp 8"
+    beforeScript 'printf "[%s] USER:\${USER:-none} JOB_ID:\${JOB_ID:-none} JOB_NAME:\${JOB_NAME:-none} HOSTNAME:\${HOSTNAME:-none} PWD:\$PWD\n"'
     tag "$sampleId"
-    publishDir "${$params.out.dir}/star/$sampleId",
+    publishDir "${params.out_dir}/star", mode: 'copy',
+        saveAs: {filename ->
+        if (filename.indexOf("Log.out")>0) "logs/$sampleId/$filename"
+        }
 
     input:
         file reads from trimmed_reads
-        file gtf from params.gtf
 
     output:
-        set file("*.Log.final.out"), file("*.bam") into star_aligned
-        file "*.out" into alignment_logs
-        file "*SJ.out.tab"
+        file "*.bam" into star_aligned
         file "*Log.out" into star_log
-        file "${sampleId}.Aligned.sortedByCoord.out.bam.bai" into aligned_index
+        file "*.out" into alignment_logs
+        file "*SJ.out.tab" into splice_junction
+        
 
     script:
+        sampleId = reads[0].toString() - ~/(_1)?(_trimmed)?(_val_1)?(\.fq)?(\.fastq)?(\.gz)?$/
         """
-        STAR --runMode alignReads --runThreadN 8 --genomeDir ${params.genome_dir} \
+        export PATH=$PATH
+        STAR --runMode alignReads --runThreadN 8 \
+        --genomeDir ${params.genome_dir} \
         --readFilesIn $reads \
-        --sjdbGTFfile ${params.genome_dir}/$gtf \
-        --outFileNamePrefix $sampleId --outSamtype Bam SortedByCoordinate \
+        --sjdbGTFfile ${params.genome_dir}/${params.gtf} \
+        --sjdbOverhang 149 \
+        --outFileNamePrefix $sampleId \
+        --outSAMtype BAM SortedByCoordinate \
         --twopassMode Basic --readFilesCommand zcat
         """
  }
