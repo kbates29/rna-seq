@@ -85,32 +85,40 @@ process trim_galore{
 
 
 /*
- * Run star 
+ * Run star and index bam files
  */
  process star{
     executor "sge"
     clusterOptions="-S /bin/bash -pe smp 8"
     beforeScript 'printf "[%s] USER:\${USER:-none} JOB_ID:\${JOB_ID:-none} JOB_NAME:\${JOB_NAME:-none} HOSTNAME:\${HOSTNAME:-none} PWD:\$PWD\n"'
     tag "$sampleId"
-    publishDir "${params.out_dir}/star", mode: 'copy',
-        saveAs: {filename ->
-        if (filename.indexOf("Log.out")>0) "logs/$sampleId/$filename"
+    publishDir "${params.out_dir}/star", mode: 'copy', 
+        saveAs: { filename ->
+            if (filename.indexOf("Log") >0 ) "logs/$filename"
+            else if (filename.indexOf("_STARgenome") >0) "STARgenome/$filename"
+            else if (filename.indexOf("_STARpass1") >0) "STARpass1/$filename"
+            else ("$filename")
         }
-
+       
     input:
         file reads from trimmed_reads
 
     output:
         file "*.bam" into star_aligned
-        file "*Log.out" into star_log
-        file "*.out" into alignment_logs
         file "*SJ.out.tab" into splice_junction
+        file "*.out" into alignment_logs
+        file "*Log.out" into star_log
+        file "*_STARgenome"
+        file "*_STARpass1"
+        file "*.bai" into index_bamcd
         
 
     script:
         sampleId = reads[0].toString() - ~/(_1)?(_trimmed)?(_val_1)?(\.fq)?(\.fastq)?(\.gz)?$/
+        sampleId = sampleId + "_"
         """
         export PATH=$PATH
+        
         STAR --runMode alignReads --runThreadN 8 \
         --genomeDir ${params.genome_dir} \
         --readFilesIn $reads \
@@ -119,35 +127,33 @@ process trim_galore{
         --outFileNamePrefix $sampleId \
         --outSAMtype BAM SortedByCoordinate \
         --twopassMode Basic --readFilesCommand zcat
+
+        samtools index ${sampleId}Aligned.sortedByCoord.out.bam
         """
  }
 
-
+/*
+ *  Run featurecounts 
+ */
  process featurecounts{
-    labal 'low_mem'
+    executor "sge"
+    clusterOptions="-S /bin/bash -pe smp 8"
+    beforeScript 'printf "[%s] USER:\${USER:-none} JOB_ID:\${JOB_ID:-none} JOB_NAME:\${JOB_NAME:-none} HOSTNAME:\${HOSTNAME:-none} PWD:\$PWD\n"'
     tag "$sampleId"
-    publishDir "${params.out.dir}/featurecounts"
-
+    publishDir "${params.out_dir}/featurecounts", mode: 'copy'
+ 
     input:
         file bam from star_aligned
-        file gtf from params.gtf
-    
+
     output:
-        file "${sampleId}_featurecounts.txt" into count_files
+        file "*counts.txt" into sample_counts
 
     script:
+        sampleId = bam[0].toString() - 'Aligned.sortedByCoord.out.bam'
         """
-        featureCounts -T  -p -t exon -g gene_id -a $gtf -o ${sampleId}_featurecounts.txt $bam
+        export PATH=$PATH
+        featureCounts -p -T 8 -t exon -a ${params.genome_dir}/${params.gtf}\
+        -o ${sampleId}counts.txt $bam
         """
  }
 
-/* process merge_counts{
-    label 'low_memory'
-    publishDir "${params.out.dur}/featurecounts"
-
-    input:
-        file input_counts from count_files.collect()
-    
-    output:
-        file "merged_counts.txt"
- }*/
